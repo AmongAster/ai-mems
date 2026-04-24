@@ -1,0 +1,19 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      APP_NAME: ai-mems
+      DATABASE_URL: sqlite:////data/memes.db
+      STORAGE_DIR: /data/storage
+      ALLOW_GENERATION: "true"
+      AI_PROVIDER: local_text
+      # OPENAI_API_KEY: ""
+    volumes:
+      # bind-mount: используем твои локальные файлы/папки
+      - ./backend/storage:/data/storage
+      - ./backend/memes.db:/data/memes.db
+    restart: unless-stopped
