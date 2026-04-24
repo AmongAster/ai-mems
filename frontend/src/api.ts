@@ -7,7 +7,7 @@ export type Meme = {
 };
 
 const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE?.toString() || "https://ai-mems.neorp.online";
+  (import.meta as any).env?.VITE_API_BASE?.toString() || "http://localhost:8001";
 
 export function apiBase() {
   return API_BASE.replace(/\/+$/, "");
@@ -34,6 +34,13 @@ export async function test(): Promise<any> {
   return (await res.json()) as any;
 }
 
+export async function fetchLatestTelegramMeme(): Promise<Meme> {
+  const res = await fetch(`${apiBase()}/telegram/fetch_latest`, { method: "POST" });
+  if (!res.ok)
+    throw new Error(`telegram/fetch_latest: ${res.status} ${JSON.stringify(await parseJsonSafe(res))}`);
+  return (await res.json()) as Meme;
+}
+
 export async function listMemes(limit = 50): Promise<Meme[]> {
   const res = await fetch(`${apiBase()}/memes?limit=${encodeURIComponent(limit)}`);
   if (!res.ok) throw new Error(`list: ${res.status} ${JSON.stringify(await parseJsonSafe(res))}`);
@@ -48,6 +55,15 @@ export async function importFromStorage(): Promise<{
 }> {
   const res = await fetch(`${apiBase()}/memes/import_from_storage`, { method: "POST" });
   if (!res.ok) throw new Error(`import: ${res.status} ${JSON.stringify(await parseJsonSafe(res))}`);
+  return (await res.json()) as any;
+}
+
+export async function clearGallery(): Promise<{
+  deleted_rows: number;
+  removed_storage_entries: number;
+}> {
+  const res = await fetch(`${apiBase()}/memes/clear`, { method: "POST" });
+  if (!res.ok) throw new Error(`clear: ${res.status} ${JSON.stringify(await parseJsonSafe(res))}`);
   return (await res.json()) as any;
 }
 

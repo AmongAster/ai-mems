@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  clearGallery,
+  fetchLatestTelegramMeme,
   Meme,
   apiBase,
   generateMeme,
@@ -16,16 +18,8 @@ function formatSource(s?: string) {
   if (s === "ai") return "AI";
   if (s === "upload") return "Upload";
   if (s === "import") return "Import";
+  if (s === "telegram") return "Telegram";
   return s;
-}
-
-// Заглушки под будущий backend
-async function postToShorts(meme: Meme) {
-  console.log("POST SHORTS", meme);
-}
-
-async function postToTikTok(meme: Meme) {
-  console.log("POST TIKTOK", meme);
 }
 
 export default function App() {
@@ -99,14 +93,19 @@ export default function App() {
             {busy === "random" ? "..." : "Рандомный мем"}
           </button>
 
-            <button className="btn" onClick={() => {
-              action("test", async () => {
-                const r = await test();
-                console.log(r);
-              });
-            }}>
-              {busy === "test" ? "..." : "Опубликовать в TikTok"}
-            </button>
+          <button
+            className="btn"
+            disabled={!!busy}
+            onClick={() =>
+              action("telegram-latest", async () => {
+                const r = await fetchLatestTelegramMeme();
+                setCurrent(r);
+                await refreshGallery();
+              })
+            }
+          >
+            {busy === "telegram-latest" ? "..." : "Выгрузить последнее из Telegram"}
+          </button>
 
           <button
             className="btn"
@@ -119,6 +118,20 @@ export default function App() {
             }
           >
             {busy === "import" ? "..." : "Импорт из storage"}
+          </button>
+          <button
+            className="btn"
+            disabled={!!busy}
+            onClick={() => {
+              if (!window.confirm("Очистить всю галерею и файлы изображений?")) return;
+              action("clear", async () => {
+                await clearGallery();
+                setCurrent(null);
+                setGallery([]);
+              });
+            }}
+          >
+            {busy === "clear" ? "..." : "Очистить галерею"}
           </button>
         </div>
       </header>
@@ -279,72 +292,3 @@ export default function App() {
     </div>
   );
 }
-
-// 🔴 ВЕРНУЛ STYLES
-const styles: { [key: string]: React.CSSProperties } = {
-  page: {
-    minHeight: "100vh",
-    background: "linear-gradient(135deg, #000000 0%, #1a0000 40%, #3b0000 100%)",
-    color: "#ffffff",
-    display: "flex",
-    justifyContent: "center",
-  },
-  container: {
-    width: "100%",
-    maxWidth: 620,
-    padding: 24,
-  },
-  title: {
-    textAlign: "center",
-    marginBottom: 24,
-    fontSize: 32,
-    fontWeight: 700,
-    background: "linear-gradient(90deg, #ff0000, #ff4d4d)",
-    WebkitBackgroundClip: "text",
-    WebkitTextFillColor: "transparent",
-  },
-  generator: {
-    display: "flex",
-    gap: 12,
-    marginBottom: 20,
-  },
-  input: {
-    flex: 1,
-    padding: 12,
-    borderRadius: 10,
-    border: "1px solid #400000",
-    background: "#0d0d0d",
-    color: "#fff",
-  },
-  button: {
-    padding: "12px 18px",
-    borderRadius: 10,
-    border: "none",
-    cursor: "pointer",
-    background: "linear-gradient(90deg, #ff0000, #cc0000)",
-    color: "white",
-  },
-  feed: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 18,
-  },
-  card: {
-    background: "linear-gradient(145deg, #120000, #220000)",
-    padding: 12,
-    borderRadius: 14,
-  },
-  image: {
-    width: "100%",
-    borderRadius: 12,
-  },
-  caption: {
-    marginTop: 8,
-    fontSize: 14,
-    color: "#ffb3b3",
-  },
-  error: {
-    color: "#ff4d4d",
-    marginTop: 10,
-  },
-};

@@ -6,6 +6,8 @@
 - `GET /memes/random` — получить случайный мем из базы, либо сгенерировать новый
 - `POST /memes/generate` — принудительно сгенерировать новый мем и сохранить
 - `GET /memes/{id}/image` — получить файл картинки
+- `POST /telegram/ingest` — принять изображение от Telegram-бота и сохранить
+- `POST /telegram/fetch_latest` — забрать последнее изображение из Telegram и сохранить
 
 Хранилище:
 - SQLite база: `backend/memes.db`
@@ -86,6 +88,30 @@ pip install openai
 - `OPENAI_API_KEY=...`
 
 Если нужно — подключу Stable Diffusion (локально или через API) вместо OpenAI.
+
+## Telegram интеграция
+
+В `.env` (backend):
+
+- `TELEGRAM_BOT_TOKEN=...`
+- `TELEGRAM_CHAT_ID=...` (опционально, чтобы брать картинки только из одного чата)
+- `TELEGRAM_INGEST_TOKEN=...` (опционально, защита эндпоинта `/telegram/ingest`)
+
+Пример загрузки от бота/скрипта:
+
+```powershell
+curl -X POST `
+  -H "X-Telegram-Token: YOUR_INGEST_TOKEN" `
+  -F "caption=мем из бота" `
+  -F "file=@C:\path\to\image.png" `
+  http://localhost:8001/telegram/ingest
+```
+
+Забрать последнее изображение из Telegram Bot API:
+
+```powershell
+curl -X POST http://localhost:8001/telegram/fetch_latest
+```
 
 ## Импорт картинок, которые уже лежат в storage/
 

@@ -1,8 +1,13 @@
 import os
+import mimetypes
 import uuid
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 from pathlib import Path
+import shutil
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
@@ -53,6 +58,105 @@ def _ensure_db():
     Base.metadata.create_all(bind=engine)
 
 
+def _meme_response(meme: Meme) -> dict:
+    return {
+        "id": meme.id,
+        "caption": meme.caption,
+        "source": meme.source,
+        "filename": meme.filename,
+        "image_url": f"/memes/{meme.id}/image",
+    }
+
+
+def _save_meme_bytes(
+    db: Session,
+    *,
+    data: bytes,
+    content_type: str,
+    caption: str | None,
+    source: str,
+    preferred_ext: str | None = None,
+) -> dict:
+    storage = _ensure_storage_dir()
+    ext = (preferred_ext or mimetypes.guess_extension(content_type) or ".img").lower()
+    if ext == ".jpe":
+        ext = ".jpg"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    (storage / filename).write_bytes(data)
+    meme = Meme(
+        caption=caption,
+        filename=filename,
+        content_type=content_type,
+        source=source,
+    )
+    db.add(meme)
+    db.commit()
+    db.refresh(meme)
+    return _meme_response(meme)
+
+
+def _telegram_api_get(method: str, **query: str) -> dict:
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=400, detail="TELEGRAM_BOT_TOKEN is not configured")
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/{method}"
+    if query:
+        url = f"{url}?{urlencode(query)}"
+    req = Request(url, method="GET")
+    try:
+        with urlopen(req, timeout=20) as resp:
+            payload = resp.read().decode("utf-8")
+    except (HTTPError, URLError) as e:
+        raise HTTPException(status_code=502, detail=f"telegram api error: {e}") from e
+    import json
+
+    data = json.loads(payload)
+    if not data.get("ok"):
+        raise HTTPException(status_code=502, detail=f"telegram api rejected request: {data}")
+    return data
+
+
+def _telegram_download_file(file_path: str) -> tuple[bytes, str]:
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=400, detail="TELEGRAM_BOT_TOKEN is not configured")
+    url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
+    req = Request(url, method="GET")
+    try:
+        with urlopen(req, timeout=30) as resp:
+            data = resp.read()
+            content_type = resp.headers.get_content_type() or "application/octet-stream"
+    except (HTTPError, URLError) as e:
+        raise HTTPException(status_code=502, detail=f"telegram file download failed: {e}") from e
+    return data, content_type
+
+
+def _extract_latest_telegram_image_message(updates: list[dict]) -> dict | None:
+    wanted_chat_id = str(settings.telegram_chat_id).strip() if settings.telegram_chat_id else None
+    for upd in reversed(updates):
+        msg = upd.get("message") or upd.get("channel_post")
+        if not isinstance(msg, dict):
+            continue
+        chat = msg.get("chat") or {}
+        chat_id = str(chat.get("id", "")).strip()
+        if wanted_chat_id and chat_id != wanted_chat_id:
+            continue
+        if msg.get("photo"):
+            return msg
+        doc = msg.get("document") or {}
+        mime = str(doc.get("mime_type", ""))
+        if mime.startswith("image/"):
+            return msg
+    return None
+
+
+def _require_ingest_token(x_telegram_token: str | None):
+    expected = (settings.telegram_ingest_token or "").strip()
+    if not expected:
+        return
+    got = (x_telegram_token or "").strip()
+    if got != expected:
+        raise HTTPException(status_code=401, detail="invalid telegram ingest token")
+
+
 @app.on_event("startup")
 def _startup():
     _ensure_storage_dir()
@@ -75,6 +179,25 @@ def import_from_storage(db: Session = Depends(get_db)):
         "skipped_existing": res.skipped_existing,
         "skipped_unsupported": res.skipped_unsupported,
     }
+
+
+@app.post("/memes/clear")
+def clear_memes(db: Session = Depends(get_db)):
+    _ensure_db()
+    deleted_rows = db.query(Meme).delete()
+    db.commit()
+
+    storage = _ensure_storage_dir()
+    removed_entries = 0
+    for item in storage.iterdir():
+        if item.is_file() or item.is_symlink():
+            item.unlink(missing_ok=True)
+            removed_entries += 1
+        elif item.is_dir():
+            shutil.rmtree(item, ignore_errors=True)
+            removed_entries += 1
+
+    return {"deleted_rows": deleted_rows, "removed_storage_entries": removed_entries}
 
 
 @app.get("/memes")
@@ -117,34 +240,18 @@ async def upload_meme(
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="only image/* is allowed")
 
-    storage = _ensure_storage_dir()
+    data = await file.read()
     ext = Path(file.filename or "").suffix.lower()
     if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
-        # если расширение странное — всё равно сохраним, но как .png-совместимое имя
-        ext = ".img"
-
-    filename = f"{uuid.uuid4().hex}{ext}"
-    dest = storage / filename
-
-    data = await file.read()
-    dest.write_bytes(data)
-
-    meme = Meme(
-        caption=caption,
-        filename=filename,
+        ext = None
+    return _save_meme_bytes(
+        db,
+        data=data,
         content_type=file.content_type,
+        caption=caption,
         source="upload",
+        preferred_ext=ext,
     )
-    db.add(meme)
-    db.commit()
-    db.refresh(meme)
-
-    return {
-        "id": meme.id,
-        "caption": meme.caption,
-        "source": meme.source,
-        "image_url": f"/memes/{meme.id}/image",
-    }
 
 
 def _create_ai_meme(db: Session, prompt: str | None) -> dict:
@@ -155,26 +262,14 @@ def _create_ai_meme(db: Session, prompt: str | None) -> dict:
     prompt = (prompt or "Сгенерируй смешной мем на русском.").strip()
     gen = generate_meme_image(prompt)
 
-    storage = _ensure_storage_dir()
-    filename = f"{uuid.uuid4().hex}.png"
-    (storage / filename).write_bytes(gen.data)
-
-    meme = Meme(
-        caption=prompt,
-        filename=filename,
+    return _save_meme_bytes(
+        db,
+        data=gen.data,
         content_type=gen.content_type,
+        caption=prompt,
         source="ai",
+        preferred_ext=".png",
     )
-    db.add(meme)
-    db.commit()
-    db.refresh(meme)
-
-    return {
-        "id": meme.id,
-        "caption": meme.caption,
-        "source": meme.source,
-        "image_url": f"/memes/{meme.id}/image",
-    }
 
 
 @app.post("/memes/generate")
@@ -227,6 +322,74 @@ def get_meme(meme_id: int, db: Session = Depends(get_db)):
 @app.get("/memes/test")
 def test():
     return {"message": "Hello, World!"}
+
+
+@app.post("/telegram/ingest")
+async def telegram_ingest(
+    file: UploadFile = File(...),
+    caption: str | None = Form(default=None),
+    x_telegram_token: str | None = Header(default=None, alias="X-Telegram-Token"),
+    db: Session = Depends(get_db),
+):
+    _ensure_db()
+    _require_ingest_token(x_telegram_token)
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="only image/* is allowed")
+    data = await file.read()
+    ext = Path(file.filename or "").suffix.lower() or None
+    if ext not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+        ext = None
+    return _save_meme_bytes(
+        db,
+        data=data,
+        content_type=file.content_type,
+        caption=caption,
+        source="telegram",
+        preferred_ext=ext,
+    )
+
+
+@app.post("/telegram/fetch_latest")
+@app.get("/telegram/fetch_latest")
+@app.post("/memes/telegram/fetch_latest")
+@app.get("/memes/telegram/fetch_latest")
+def telegram_fetch_latest(db: Session = Depends(get_db)):
+    _ensure_db()
+    updates = _telegram_api_get("getUpdates", limit="100").get("result", [])
+    if not isinstance(updates, list):
+        raise HTTPException(status_code=502, detail="telegram updates format is invalid")
+    message = _extract_latest_telegram_image_message(updates)
+    if not message:
+        raise HTTPException(status_code=404, detail="no image messages found in telegram updates")
+
+    caption = message.get("caption") or message.get("text")
+    content_type = "image/jpeg"
+    preferred_ext = ".jpg"
+
+    if message.get("photo"):
+        photos = message["photo"]
+        file_id = photos[-1]["file_id"]
+    else:
+        document = message["document"]
+        file_id = document["file_id"]
+        content_type = document.get("mime_type") or content_type
+        preferred_ext = Path(document.get("file_name") or "").suffix.lower() or None
+
+    file_data = _telegram_api_get("getFile", file_id=file_id).get("result", {})
+    file_path = file_data.get("file_path")
+    if not file_path:
+        raise HTTPException(status_code=502, detail="telegram did not return file_path")
+
+    data, downloaded_content_type = _telegram_download_file(file_path)
+    final_content_type = content_type or downloaded_content_type
+    return _save_meme_bytes(
+        db,
+        data=data,
+        content_type=final_content_type,
+        caption=caption,
+        source="telegram",
+        preferred_ext=preferred_ext,
+    )
 
 
 # Для локальной разработки, если запускать: python -m app.main

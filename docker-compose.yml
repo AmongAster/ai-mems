@@ -3,6 +3,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
     ports:
       - "8001:8000"
     environment:
@@ -16,4 +18,16 @@ services:
       # bind-mount: используем твои локальные файлы/папки
       - ./backend/storage:/data/storage
       - ./backend/memes.db:/data/memes.db
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_BASE: http://localhost:8001
+    depends_on:
+      - backend
     restart: unless-stopped
