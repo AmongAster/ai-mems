@@ -7,7 +7,7 @@ export type Meme = {
 };
 
 const API_BASE =
-  (import.meta as any).env?.VITE_API_BASE?.toString() || "http://localhost:8001";
+  (import.meta as any).env?.VITE_API_BASE?.toString() || "https://ai-mems.neorp.online";
 
 export function apiBase() {
   return API_BASE.replace(/\/+$/, "");
@@ -26,6 +26,12 @@ export async function getRandomMeme(): Promise<Meme> {
   const res = await fetch(`${apiBase()}/memes/random`);
   if (!res.ok) throw new Error(`random: ${res.status} ${JSON.stringify(await parseJsonSafe(res))}`);
   return (await res.json()) as Meme;
+}
+
+export async function test(): Promise<any> {
+  const res = await fetch(`${apiBase()}/memes/test`);
+  if (!res.ok) throw new Error(`test: ${res.status} ${JSON.stringify(await parseJsonSafe(res))}`);
+  return (await res.json()) as any;
 }
 
 export async function listMemes(limit = 50): Promise<Meme[]> {
